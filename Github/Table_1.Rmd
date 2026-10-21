@@ -1,0 +1,498 @@
+---
+title: "Table 1 of study retention analysis"
+author: "Gina Guzzo"
+date: "2025-11-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Load packages and libraries.
+
+```{r, include = FALSE}
+library(kableExtra)
+library(rmarkdown)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readxl) 
+library(openxlsx)
+
+require("knitr")
+opts_knit$set(root.dir = "/2025_study_retention_analysis/Analysis/")
+
+```
+
+
+Import data. 
+Format categorical variables to be read by the table calculations.
+
+```{r}
+metadata <- read_excel("metadata/r_all_metadata_output.xlsx")
+
+
+## Format categorical variables
+
+# Location of participant
+metadata <- metadata %>%
+  mutate(
+    remoteness_group = case_when(
+      remoteness %in% c("Major Cities of Australia", "Inner Regional Australia") ~ "Metropolitan and Inner Regional",
+      remoteness %in% c("Outer Regional Australia", "Remote Australia", "Very Remote Australia") ~ "Outer Regional, Remote, and Very Remote"
+    )
+  )
+
+
+# Income source
+metadata$income_merged <- as.character(metadata$income_merged)
+
+
+# Health Care Card
+metadata$healthcare_card_cat <- as.character(metadata$healthcare_card)
+metadata$healthcare_card_cat <- replace_na(metadata$healthcare_card_cat, "missing") #Replace NAs with categorical variable
+
+
+# Last dental visit
+metadata$last_dent_visit <- as.character(metadata$last_dent_visit)
+metadata$last_dent_visit <- replace_na(metadata$last_dent_visit, "missing") #Replace NAs with categorical variable
+
+
+# Usual reason for dental visits
+metadata$dentist_reason_cat <- as.character(metadata$dentist_reason)
+metadata$dentist_reason_cat <- replace_na(metadata$dentist_reason_cat, "missing") #Replace NAs with categorical variable
+
+
+# Avoiding dentist because of cost
+metadata$dentist_cost_cat <- as.character(metadata$dentist_cost)
+metadata$dentist_cost_cat <- replace_na(metadata$dentist_cost_cat, "missing") #Replace NAs with categorical variable
+
+
+# Study appointment setting at baseline
+metadata %>%
+  dplyr::distinct(location_baseline) #List appointment settings to recode (baseline)
+
+
+
+# Baseline appointment locations
+metadata <- metadata %>%
+  mutate(
+    appt_location_b = case_when(
+      location_baseline %in% c("ADL-SIM", "PAG-UOA", "CRF") ~ "University research clinic",
+      location_baseline %in% c("PAG-HOME", "ADL-HOME", "ADL-H") ~ "Home",
+      location_baseline %in% c("ADL-CC", "ADL-PT", "NCC", "ICP", "ADL-KY", "NREC") ~ "Community centre",
+      location_baseline %in% c("HAW-M", "KANG", "QEH") ~ "Healthcare centre",
+      location_baseline %in% c("NURI", "TAIK", "CBHS") ~ "School or childcare centre"
+      )
+    ) 
+
+
+## Check output for baseline locations
+metadata %>%
+  dplyr::distinct(appt_location_b) #Check results
+
+
+
+## Organisation recruitment variable
+metadata <- metadata %>%
+  mutate(
+    org_recruitment = if_else(
+      is.na(community_organisation),
+      "No",
+      "Yes"
+    )
+  )
+```
+
+
+Recode variable for the table input.
+```{r}
+table_data <- metadata %>%
+  mutate(
+    Gender = case_when(
+      sex == "2" ~ "Female",
+      sex == "1" ~ "Male",
+      TRUE ~ "Missing"
+    ),
+
+    Age = case_when(
+      adult_child == "adult" ~ "Adult",
+      adult_child == "child" ~ "Child (under 18 years)",
+      TRUE ~ "Missing"
+    ),
+
+    `Location of participant` = coalesce(
+      as.character(remoteness_group), "Missing"
+    ),
+    
+    `Income source` = case_when(
+      adult_child == "child" ~ "Not applicable",
+      adult_child == "adult" & is.na(income_merged) ~ "Missing",
+      adult_child == "adult" ~ as.character(income_merged),
+      TRUE ~ "Missing"
+      ),
+
+    `Health Care Card` = recode(
+      healthcare_card_cat,
+      "1" = "Yes",
+      "2" = "No",
+      "3" = "Unsure",
+      "missing" = "Missing",
+      .default = "Missing"
+    ),
+
+    `Time since last dental visit` = recode(
+      last_dent_visit,
+      "1" = "Less than a year ago",
+      "2" = "More than a year ago",
+      "missing" = "Missing",
+      .default = "Missing"
+    ),
+
+    `Usual reason for dental visit` = recode(
+      dentist_reason_cat,
+      "1" = "Problem",
+      "2" = "Check-up",
+      "missing" = "Missing",
+      .default = "Missing"
+    ),
+
+    `Avoided dentist due to cost` = recode(
+      dentist_cost_cat,
+      "1" = "Yes",
+      "0" = "No",
+      "missing" = "Missing",
+      .default = "Missing"
+    ),
+
+    `Recruitment through organisation` = coalesce(
+      as.character(org_recruitment), "Missing"
+    ),
+
+    `Study appointment setting at baseline` = coalesce(
+      as.character(appt_location_b), "Missing"
+    ),
+
+    followup_status = case_when(
+      as.character(followed_up) == "yes" ~ "Followed up",
+      as.character(followed_up) == "no"  ~ "Lost to follow-up",
+      TRUE ~ NA_character_
+    )
+  )
+
+
+## Make a list of table variables
+table_vars <- c(
+  "Gender",
+  "Age",
+  "Location of participant",
+  "Income source",
+  "Health Care Card",
+  "Time since last dental visit",
+  "Usual reason for dental visit",
+  "Avoided dentist due to cost",
+  "Recruitment through organisation",
+  "Study appointment setting at baseline"
+)
+
+
+## Convert the selected variables to long format
+long_data <- table_data %>%
+  select(followup_status, all_of(table_vars)) %>%
+  pivot_longer(
+    cols = all_of(table_vars),
+    names_to = "Characteristic",
+    values_to = "Category"
+  ) %>%
+  filter(
+    !(Characteristic == "Income source" &
+        Category == "Not applicable")
+  )  # Remove child income data as it will be NA
+
+
+## Count each category in the baseline cohort
+baseline_counts <- long_data %>%
+  count(Characteristic, Category, name = "baseline_n")
+
+
+## Count follow-up outcomes within each baseline category
+followup_counts <- long_data %>%
+  filter(!is.na(followup_status)) %>%
+  count(Characteristic, Category, followup_status, name = "n") %>%
+  pivot_wider(
+    names_from = followup_status,
+    values_from = n,
+    values_fill = 0
+  )
+
+
+## Combine counts and calculate percentages
+table1 <- baseline_counts %>%
+  left_join(
+    followup_counts,
+    by = c("Characteristic", "Category")
+  ) %>%
+  mutate(
+    `Followed up` = coalesce(`Followed up`, 0L),
+    `Lost to follow-up` = coalesce(`Lost to follow-up`, 0L),
+
+    baseline_pct = case_when(
+      Characteristic == "Income source" ~
+        100 * baseline_n / sum(metadata$adult_child == "adult",
+                           na.rm = TRUE),
+      TRUE ~
+        100 * baseline_n / nrow(metadata)
+      ),
+
+    followed_pct = if_else(
+      baseline_n > 0,
+      100 * `Followed up` / baseline_n,
+      NA_real_
+    ),
+
+    lost_pct = if_else(
+      baseline_n > 0,
+      100 * `Lost to follow-up` / baseline_n,
+      NA_real_
+    )
+  ) %>%
+  mutate(
+    `Baseline, n (%)` = sprintf(
+      "%d (%.1f)", baseline_n, baseline_pct
+    ),
+    `Followed up, n (%)` = sprintf(
+      "%d (%.1f)", `Followed up`, followed_pct
+    ),
+    `Lost to follow-up, n (%)` = sprintf(
+      "%d (%.1f)", `Lost to follow-up`, lost_pct
+    )
+  ) %>%
+  select(
+    Characteristic,
+    Category,
+    `Baseline, n (%)`,
+    `Followed up, n (%)`,
+    `Lost to follow-up, n (%)`
+  )
+
+
+## Print table output
+table1
+```
+
+
+Save table 1.
+```{r}
+write.xlsx(
+  table1,
+  file = "/output/Table1_output.xlsx",
+  rowNames = FALSE
+)
+```
+
+
+
+Statistical analysis.
+```{r}
+## As Fisher's simulated test changes slightly each time, set seed first to ensure reproducibility
+set.seed(124)
+
+
+## Define follow-up variable.
+analysis_data <- metadata %>%
+  mutate(
+    followup_binary = case_when(
+      tolower(as.character(followed_up)) == "yes" ~ "Followed up",
+      tolower(as.character(followed_up)) == "no"  ~ "Lost to follow-up",
+      TRUE ~ NA_character_
+    ),
+    followup_binary = factor(
+      followup_binary,
+      levels = c("Followed up", "Lost to follow-up")
+    )
+  )
+ 
+
+## Check that counts match
+table(analysis_data$followup_binary, useNA = "ifany")  # Yes correctly matching.
+
+
+
+## Make categorical variables function
+test_categorical <- function(data, variable) {
+
+  test_data <- data %>%
+    select(all_of(c(variable, "followup_binary"))) %>%
+    filter(
+      !is.na(.data[[variable]]),
+      !is.na(followup_binary)
+    )
+
+  tab <- table(
+    test_data[[variable]],
+    test_data$followup_binary
+  )
+
+  if (nrow(tab) < 2 || ncol(tab) < 2) {
+    return(data.frame(
+      variable = variable,
+      test = NA_character_,
+      p_value = NA_real_
+    ))
+  }
+
+  chi <- suppressWarnings(chisq.test(tab, correct = FALSE))
+
+  if (any(chi$expected < 5)) {
+    if (all(dim(tab) == c(2, 2))) {
+      result <- fisher.test(tab)
+      test_name <- "Fisher's exact"
+    } else {
+      result <- fisher.test(tab, simulate.p.value = TRUE,
+                            B = 10000)
+      test_name <- "Fisher's exact (simulated)"
+    }
+  } else {
+    result <- chi
+    test_name <- "Chi-squared"
+  }
+
+  data.frame(
+    variable = variable,
+    test = test_name,
+    p_value = result$p.value
+  )
+}
+```
+
+
+
+Run stats tests.
+```{r}
+variables_table1 <- c(
+  "sex",
+  "adult_child",
+  "remoteness_group",
+  "income_merged",
+  "last_dent_visit",
+  "dentist_reason_cat",
+  "dentist_cost_cat",
+  "org_recruitment",
+  "appt_location_b"
+  
+)
+
+results_table1 <- bind_rows(
+  lapply(
+    variables_table1,
+    function(v) test_categorical(analysis_data, v)
+  )
+) %>%
+  mutate(p_value = signif(p_value, 3))
+
+
+## Print results table
+results_table1
+```
+
+
+Other variables - age.
+```{r}
+## Age as a continuous variable
+wilcox.test(age ~ followup_binary, data = analysis_data, conf.int = TRUE)
+
+```
+
+
+Confidence intervals.
+```{r}
+## Categories to exclude from tests and per-category summaries
+exclude_levels <- c("missing", "data missing", "retired/retirement savings") # Retirement category excluded due to small size (n = 4)
+
+drop_excluded <- function(data, variable) {
+  data %>%
+    filter(
+      !is.na(.data[[variable]]),
+      !is.na(followup_binary),
+      !tolower(as.character(.data[[variable]])) %in% exclude_levels
+    )
+}
+
+test_categorical <- function(data, variable) {
+
+  test_data <- data %>%
+    select(all_of(c(variable, "followup_binary"))) %>%
+    drop_excluded(variable) %>%
+    droplevels()
+
+
+  tab <- table(test_data[[variable]], test_data$followup_binary)
+
+  if (nrow(tab) < 2 || ncol(tab) < 2) {
+    return(data.frame(variable = variable, n = sum(tab), test = NA_character_,
+                      p_value = NA_real_, cramers_v = NA_real_,
+                      v_low = NA_real_, v_high = NA_real_,
+                      OR = NA_real_, OR_low = NA_real_, OR_high = NA_real_))
+  }
+
+  chi <- suppressWarnings(chisq.test(tab, correct = FALSE))
+
+  if (any(chi$expected < 5)) {
+    if (all(dim(tab) == c(2, 2))) {
+      result <- fisher.test(tab);                       test_name <- "Fisher's exact"
+    } else {
+      result <- fisher.test(tab, simulate.p.value = TRUE, B = 10000)
+      test_name <- "Fisher's exact (simulated)"
+    }
+  } else {
+    result <- chi;                                      test_name <- "Chi-squared"
+  }
+
+  # Cramér's V with two-sided 95% CI
+  es <- as.data.frame(effectsize::cramers_v(tab, ci = 0.95,
+                                            alternative = "two.sided"))
+
+  # Odds ratio for 2x2 tables only
+  or <- or_low <- or_high <- NA_real_
+  if (all(dim(tab) == c(2, 2))) {
+    f <- fisher.test(tab)
+    or <- unname(f$estimate); or_low <- f$conf.int[1]; or_high <- f$conf.int[2]
+  }
+
+  data.frame(
+    variable  = variable,
+    n         = sum(tab),
+    test      = test_name,
+    p_value   = result$p.value,
+    cramers_v = es[[1]],
+    v_low     = es$CI_low,
+    v_high    = es$CI_high,
+    OR        = or, OR_low = or_low, OR_high = or_high
+  )
+}
+
+## % lost to follow-up within each category, with exact 95% CIs
+describe_categories <- function(data, variable) {
+  data %>%
+    drop_excluded(variable) %>%
+    group_by(variable = variable, level = as.character(.data[[variable]])) %>%
+    summarise(
+      n        = n(),
+      n_lost   = sum(followup_binary == "Lost to follow-up"),
+      pct_lost = 100 * n_lost / n,
+      ci_low   = 100 * binom.test(n_lost, n)$conf.int[1],
+      ci_high  = 100 * binom.test(n_lost, n)$conf.int[2],
+      .groups  = "drop"
+    )
+}
+
+results_table1 <- bind_rows(lapply(variables_table1,
+                                   function(v) test_categorical(analysis_data, v)))
+
+categories_table1 <- bind_rows(lapply(variables_table1,
+                                      function(v) describe_categories(analysis_data, v)))
+```
+
+

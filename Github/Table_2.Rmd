@@ -1,0 +1,179 @@
+---
+title: "Table 2 of study retention analysis"
+author: "Gina Guzzo"
+date: "2026-10-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Load packages and libraries.
+
+```{r, include = FALSE}
+library(kableExtra)
+library(rmarkdown)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readxl) 
+library(openxlsx)
+
+
+require("knitr")
+opts_knit$set(root.dir = "/2025_study_retention_analysis/Analysis/")
+
+```
+
+
+Import data. 
+Format categorical variables to be read by the table calculations.
+
+```{r}
+metadata <- read_excel("/metadata/r_all_metadata_output.xlsx")
+
+
+## Keep participants with a recorded reason for attrition.
+attrition_data <- metadata %>%
+  filter(!is.na(reason_for_attrition),
+         reason_for_attrition != "")
+
+
+## Total number of participants with a reason for attrition.
+N_attrition <- nrow(attrition_data) # Sums to total number of participants lost to contact
+
+
+## Main attrition reason counts
+main_reasons <- attrition_data %>%
+  count(reason_for_attrition, name = "n") %>%
+  mutate(
+    pct = 100 * n / N_attrition
+  )
+
+
+## Subgroup attrition reason counts
+subgroups <- attrition_data %>%
+  filter(
+    !is.na(reason_for_attrition_subgroup),
+    reason_for_attrition_subgroup != ""
+  ) %>%
+  count(
+    reason_for_attrition,
+    reason_for_attrition_subgroup,
+    name = "n"
+  ) %>%
+  mutate(
+    pct = 100 * n / N_attrition
+  )
+```
+
+
+
+Assemble the table.
+```{r}
+## Define the display order and labels
+attrition_table <- bind_rows(
+
+  main_reasons %>%
+    filter(reason_for_attrition == "Lost to contact") %>%
+    transmute(
+      order = 1,
+      Reason = "Lost to contact",
+      n, pct
+    ),
+
+  subgroups %>%
+    filter(reason_for_attrition == "Lost to contact") %>%
+    transmute(
+      order = case_when(
+        reason_for_attrition_subgroup ==
+          "No response/contact details changed" ~ 1.1,
+        reason_for_attrition_subgroup ==
+          "Change in caregiver/guardianship" ~ 1.2,
+        TRUE ~ 1.9
+      ),
+      Reason = paste0("   ", reason_for_attrition_subgroup),
+      n, pct
+    ),
+
+  main_reasons %>%
+    filter(reason_for_attrition == "Personal or family circumstances") %>%
+    transmute(
+      order = 2,
+      Reason = "Personal or family circumstances",
+      n, pct
+    ),
+
+  subgroups %>%
+    filter(reason_for_attrition == "Personal or family circumstances") %>%
+    transmute(
+      order = case_when(
+        reason_for_attrition_subgroup ==
+          "Competing personal commitments" ~ 2.1,
+        reason_for_attrition_subgroup ==
+          "Participant health circumstances" ~ 2.2,
+        reason_for_attrition_subgroup ==
+          "Family health or caregiving responsibilities" ~ 2.3,
+        TRUE ~ 2.9
+      ),
+      Reason = paste0("   ", reason_for_attrition_subgroup),
+      n, pct
+    ),
+
+  main_reasons %>%
+    filter(reason_for_attrition == "No longer interested") %>%
+    transmute(order = 3, Reason = reason_for_attrition, n, pct),
+
+  main_reasons %>%
+    filter(reason_for_attrition == "Deceased") %>%
+    transmute(order = 4, Reason = reason_for_attrition, n, pct),
+
+  main_reasons %>%
+    filter(reason_for_attrition == "Other barriers") %>%
+    transmute(order = 5, Reason = reason_for_attrition, n, pct),
+
+  subgroups %>%
+    filter(reason_for_attrition == "Other barriers") %>%
+    transmute(
+      order = case_when(
+        reason_for_attrition_subgroup == "Incarceration" ~ 5.1,
+        reason_for_attrition_subgroup == "Transportation barriers" ~ 5.2,
+        TRUE ~ 5.9
+      ),
+      Reason = paste0("   ", reason_for_attrition_subgroup),
+      n, pct
+    ),
+
+  main_reasons %>%
+    filter(reason_for_attrition == "Moved out of study area") %>%
+    transmute(order = 6, Reason = reason_for_attrition, n, pct)
+
+) %>%
+  arrange(order) %>%
+  mutate(`n (%)` = sprintf("%d (%.1f)", n, pct)) %>%
+  select(Reason, `n (%)`)
+
+
+## Print Table 2
+attrition_table
+```
+
+
+
+```{r}
+unique(metadata$reason_for_attrition)
+unique(metadata$reason_for_attrition_subgroup)
+```
+
+
+
+Save table 2.
+```{r}
+write.xlsx(
+  attrition_table,
+  file = "/output/Table2_output.xlsx",
+  rowNames = FALSE
+)
+```

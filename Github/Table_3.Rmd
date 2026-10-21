@@ -1,0 +1,326 @@
+---
+title: "Table 3 for study retention analysis"
+author: "Gina Guzzo"
+date: "2026-10-16"
+output: html_document
+---
+
+
+Load packages and libraries.
+
+```{r, include = FALSE}
+library(kableExtra)
+library(rmarkdown)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readxl) 
+library(openxlsx)
+
+
+require("knitr")
+opts_knit$set(root.dir = "/2025_study_retention_analysis/Analysis/")
+
+```
+
+
+Import data. 
+Format categorical variables to be read by the table calculations.
+
+```{r}
+metadata <- read_excel("/metadata/r_all_metadata_output.xlsx")
+
+
+## Format categorical variables
+
+# Treatment status
+metadata <- metadata %>%
+  mutate(
+    treatment_status = case_when(
+      treatment_status_final %in% c("complete") ~ "Complete",
+      treatment_status_final %in% c("incomplete") ~ "Partial treatment",
+      treatment_status_final %in% c("none") ~ "Did not commence",
+      treatment_status_final %in% c("unknown") ~ "Unknown",
+      treatment_status_final %in% c("unknown if completed") ~ "Partial treatment",
+      treatment_status_final %in% c("deceased") ~ "Could not complete",
+      treatment_status_final %in% c("none required", "did not want treatment") ~ NA
+      )
+  )
+
+
+## Check values for:
+
+# Referral type
+metadata %>%
+  dplyr::distinct(referral_type) 
+
+# Treatment status
+metadata %>%
+  dplyr::distinct(treatment_status) 
+
+
+# Indigenous dentist referral
+metadata %>%
+  dplyr::distinct(indigenous_dentist)
+
+
+## Count number of people referred for treatment
+metadata %>%
+  filter(referral_type %in% c("private", "public")) %>%
+  summarise(
+    referred_for_treatment = n(),
+    treatment_status_recorded = sum(!is.na(treatment_status)),
+    treatment_status_missing = sum(is.na(treatment_status))
+  )
+
+
+metadata %>%
+  filter(referral_type %in% c("private", "public")) %>%
+  count(treatment_status, .drop = FALSE)
+```
+
+
+Format Table 3.
+```{r}
+
+## Define the follow-up groups
+table_data <- metadata %>%
+  mutate(
+    followup_status = case_when(
+      tolower(as.character(followed_up)) == "yes" ~ "Followed up",
+      tolower(as.character(followed_up)) == "no"  ~ "Lost to follow-up",
+      TRUE ~ NA_character_
+    )
+  )
+
+
+## Make function to create one section of the table
+make_section <- function(data, variable, section_label,
+                         eligible = rep(TRUE, nrow(data))) {
+
+  # Baseline counts for eligible participants with recorded data
+  baseline <- data %>%
+    filter(eligible, !is.na(.data[[variable]])) %>%
+    count(category = as.character(.data[[variable]]),
+          name = "Baseline")
+
+  # Counts by follow-up status
+  followup <- data %>%
+    filter(eligible, !is.na(.data[[variable]]),
+           !is.na(followup_status)) %>%
+    count(
+      category = as.character(.data[[variable]]),
+      followup_status,
+      name = "n"
+    ) %>%
+    pivot_wider(
+      names_from = followup_status,
+      values_from = n,
+      values_fill = 0
+    )
+
+  # Combine baseline and follow-up counts
+  result <- baseline %>%
+    left_join(followup, by = "category") %>%
+    mutate(
+      `Followed up` = coalesce(`Followed up`, 0L),
+      `Lost to follow-up` = coalesce(`Lost to follow-up`, 0L),
+      `Baseline` = paste0(Baseline),
+      `Followed up` = paste0(
+        `Followed up`, " (",
+        sprintf("%.1f", as.numeric(`Followed up`) /
+                  as.numeric(Baseline) * 100), "%)"
+      ),
+      `Lost to follow-up` = paste0(
+        `Lost to follow-up`, " (",
+        sprintf("%.1f", as.numeric(`Lost to follow-up`) /
+                  as.numeric(Baseline) * 100), "%)"
+      ),
+      section = section_label
+    ) %>%
+    select(section, category, Baseline,
+           `Followed up`, `Lost to follow-up`)
+
+  result
+}
+
+
+## Referral type: all participants with a recorded referral type
+referral_table <- make_section(
+  table_data,
+  "referral_type",
+  "Referral type"
+)
+
+## Treatment status: only participants referred for treatment
+treatment_table <- make_section(
+  table_data,
+  "treatment_status",
+  "Treatment status",
+  eligible = table_data$referral_type %in% c("private", "public")
+)
+
+## Indigenous dentist referral: only participants referred for treatment
+indigenous_table <- make_section(
+  table_data,
+  "indigenous_dentist",
+  "Referral to Indigenous dentist",
+  eligible = table_data$referral_type %in% c("private", "public")
+)
+
+# Combine sections
+table3 <- bind_rows(
+  referral_table,
+  treatment_table,
+  indigenous_table
+)
+
+
+## Print Table 3
+table3
+
+```
+
+
+Save table 3.
+```{r}
+write.xlsx(
+  table3,
+  file = "/output/Table3_output.xlsx",
+  rowNames = FALSE
+)
+```
+
+
+
+Statistical analysis.
+```{r}
+## As Fisher's simulated test changes slightly each time, set seed first to ensure reproducibility
+set.seed(42)
+
+
+## Define follow-up variable.
+analysis_data <- metadata %>%
+  mutate(
+    followup_binary = case_when(
+      tolower(as.character(followed_up)) == "yes" ~ "Followed up",
+      tolower(as.character(followed_up)) == "no"  ~ "Lost to follow-up",
+      TRUE ~ NA_character_
+    ),
+    followup_binary = factor(
+      followup_binary,
+      levels = c("Followed up", "Lost to follow-up")
+    )
+  )
+ 
+
+## Check counts match
+table(analysis_data$followup_binary, useNA = "ifany")  # Yes correctly matching.
+
+## Categories to exclude from tests and per-category summaries (compared in lower case)
+exclude_levels <- c("did not want treatment") # Those who did not want treatment are dropped due to low number (n = 3)
+
+
+## Make categorical variables function
+drop_excluded <- function(data, variable, exclude = NULL) {
+  data %>%
+    filter(
+      !is.na(.data[[variable]]),
+      !is.na(followup_binary),
+      !tolower(as.character(.data[[variable]])) %in% tolower(exclude)
+    )
+}
+
+test_categorical <- function(data, variable, exclude = NULL, ref = NULL) {
+
+  test_data <- data %>%
+    select(all_of(c(variable, "followup_binary"))) %>%
+    drop_excluded(variable, exclude) %>%
+    droplevels()
+
+  # Reference category first, so OR = "second level vs reference"
+  test_data[[variable]] <- factor(test_data[[variable]])
+  if (!is.null(ref)) {
+    test_data[[variable]] <- relevel(test_data[[variable]], ref = ref)
+  }
+
+  tab <- table(test_data[[variable]], test_data$followup_binary)
+
+  if (nrow(tab) < 2 || ncol(tab) < 2) {
+    return(data.frame(variable = variable, n = sum(tab), test = NA_character_,
+                      p_value = NA_real_, cramers_v = NA_real_,
+                      v_low = NA_real_, v_high = NA_real_,
+                      OR = NA_real_, OR_low = NA_real_, OR_high = NA_real_))
+  }
+
+  chi <- suppressWarnings(chisq.test(tab, correct = FALSE))
+
+  if (any(chi$expected < 5)) {
+    if (all(dim(tab) == c(2, 2))) {
+      result <- fisher.test(tab);                       test_name <- "Fisher's exact"
+    } else {
+      result <- fisher.test(tab, simulate.p.value = TRUE, B = 10000)
+      test_name <- "Fisher's exact (simulated)"
+    }
+  } else {
+    result <- chi;                                      test_name <- "Chi-squared"
+  }
+
+  es <- as.data.frame(effectsize::cramers_v(tab, ci = 0.95,
+                                            alternative = "two.sided"))
+
+  or <- or_low <- or_high <- NA_real_
+  if (all(dim(tab) == c(2, 2))) {
+    f <- fisher.test(tab)
+    or <- unname(f$estimate); or_low <- f$conf.int[1]; or_high <- f$conf.int[2]
+  }
+
+  data.frame(
+    variable = variable, n = sum(tab), test = test_name,
+    p_value = result$p.value,
+    cramers_v = es[[1]], v_low = es$CI_low, v_high = es$CI_high,
+    OR = or, OR_low = or_low, OR_high = or_high
+  )
+}
+
+describe_categories <- function(data, variable, exclude = NULL) {
+  data %>%
+    drop_excluded(variable, exclude) %>%
+    group_by(variable = variable, level = as.character(.data[[variable]])) %>%
+    summarise(
+      n        = n(),
+      n_lost   = sum(followup_binary == "Lost to follow-up"),
+      pct_lost = 100 * n_lost / n,
+      ci_low   = 100 * binom.test(n_lost, n)$conf.int[1],
+      ci_high  = 100 * binom.test(n_lost, n)$conf.int[2],
+      .groups  = "drop"
+    )
+}
+```
+
+
+
+Run analyses.
+```{r}
+## Check exact labels first, because exclude and ref must match them
+unique(analysis_data$referral_type)
+unique(analysis_data$indigenous_dentist)
+
+
+## Referral type: exclude the 3 who did not want treatment (match the label)
+res_referral <- test_categorical(analysis_data, "referral_type",
+                                 exclude = "did not want treatment",
+                                 ref = "private")
+
+
+## Indigenous dentist referral, among those referred to a private or public clinic
+dentist_data <- analysis_data %>%
+  filter(referral_type %in% c("private", "public"))
+
+res_dentist <- test_categorical(dentist_data, "indigenous_dentist", ref = "no")
+
+
+results_table3 <- bind_rows(res_referral, res_dentist)
+results_table3   # check n = 402 and n = 327 
+```
+
